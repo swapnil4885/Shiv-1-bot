@@ -1,48 +1,54 @@
 import os
-from flask import Flask, request
+import logging
 import requests
-import openai
+import gspread
+from flask import Flask, request
+from oauth2client.service_account import ServiceAccountCredentials
 
+# ---------------- Logging ----------------
+logging.basicConfig(level=logging.INFO)
+
+# ---------------- Flask App ----------------
 app = Flask(__name__)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# ---------------- Telegram Token ----------------
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8100473808:AAEF00mdUg5wKClRA8D_Nm03aES5iBQYsQ4")
+TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-openai.api_key = OPENAI_API_KEY
+# ---------------- Google Sheets Setup ----------------
+SHEET_ID = os.getenv("SHEET_ID", "1V3mBt5BkXRSjLLDHJoN1bfO35mgs56whdCGGHpC6DNM")
 
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+client = gspread.authorize(creds)
+sheet = client.open_by_key(SHEET_ID).sheet1
+
+# ---------------- Telegram Webhook Endpoint ----------------
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def telegram_webhook():
+    update = request.get_json()
+    if "message" in update:
+        chat_id = update["message"]["chat"]["id"]
+        text = update["message"].get("text", "")
+
+        # Write to Google Sheet
+        sheet.append_row([text])
+
+        # Reply back
+        send_message(chat_id, f"तुझा मेसेज Sheet मध्ये सेव्ह केला आहे: {text}")
+    return "OK"
+
+# ---------------- Send Message Function ----------------
+def send_message(chat_id, text):
+    url = f"{TELEGRAM_URL}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
     requests.post(url, json=payload)
 
-@app.route("/health")
-def health():
-    return "OK", 200
+# ---------------- Home Page ----------------
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot चालू आहे ✅"
 
-@app.route("/update", methods=["POST", "GET"])
-def update():
-    try:
-        prompt = "Give today's Nifty scalping radar update in brief."
-        completion = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        message = completion.choices[0].message["content"]
-        send_telegram_message(f"📊 *Shiv Pro Scalping Radar*\n\n{message}")
-        return "Sent", 200
-    except Exception as e:
-        return str(e), 500
-
-@app.route("/cron/morning")
-def cron_morning():
-    send_telegram_message("🌅 Good Morning! Market Radar is live for today.")
-    return "Morning update sent", 200
-
-@app.route("/cron/evening")
-def cron_evening():
-    send_telegram_message("🌇 Market closed. Evening summary coming soon.")
-    return "Evening update sent", 200
-
+# ---------------- Main ----------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
